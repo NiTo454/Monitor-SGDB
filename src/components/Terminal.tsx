@@ -9,13 +9,13 @@ export default function Terminal() {
     host: 'localhost',
     port: '3306',
     user: 'root',
-    password: 'M@1uU$312-DB',
+    password: process.env.NEXT_PUBLIC_DB_PASSWORD || '',
     database: '',
     query: ''
   });
 
   // Estados separados para la Terminal y el Chat
-  const [dbLogs, setDbLogs] = useState<{text: string, type: 'info' | 'success' | 'error' | 'warn' | 'ai', data?: any[]}[]>([
+  const [dbLogs, setDbLogs] = useState<{text: string, type: 'info' | 'success' | 'error' | 'warn' | 'ai' | 'user', data?: any[]}[]>([
     { text: 'TERMINAL SGBD. A la espera de comandos...', type: 'info' }
   ]);
   const [chatLogs, setChatLogs] = useState<{text: string, type: 'user' | 'ai' | 'error'}[]>([
@@ -32,7 +32,7 @@ export default function Terminal() {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
 
-  const addDbLog = (text: string, type: 'info' | 'success' | 'error' | 'warn' | 'ai', data?: any[]) => {
+  const addDbLog = (text: string, type: 'info' | 'success' | 'error' | 'warn' | 'ai' | 'user', data?: any[]) => {
     setDbLogs(prev => [...prev, { text, type, data }]);
   };
 
@@ -59,6 +59,13 @@ export default function Terminal() {
     setFormData(prev => ({ ...prev, query: commandToUse }));
   };
 
+  // Ejecutar comando con Ctrl + Enter
+  const handleKeyDownCommand = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      executeCommand();
+    }
+  };
 
   const handleResponse = async (res: Response) => {
     const text = await res.text();
@@ -71,9 +78,16 @@ export default function Terminal() {
 
 
   const executeCommand = async () => {
-    if (!formData.query) return;
+    if (!formData.query.trim()) return;
+
+    const currentQuery = formData.query;
+    const currentFormData = { ...formData };
+
+    setFormData(prev => ({ ...prev, query: '' })); // Limpiar el input
+
     setIsExecuting(true);
-    addDbLog(`> Ejecutando en ${formData.engine}...`, 'info');
+    addDbLog(`> ${currentQuery}`, 'user');
+    addDbLog(`Ejecutando en ${currentFormData.engine}...`, 'info');
 
     try {
 
@@ -81,7 +95,7 @@ export default function Terminal() {
       const auditRes = await fetch('/api/audit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: formData.query, engine: formData.engine, userRole: formData.user })
+        body: JSON.stringify({ query: currentQuery, engine: currentFormData.engine, userRole: currentFormData.user })
       });
 
       const auditData = await handleResponse(auditRes);
@@ -97,7 +111,7 @@ export default function Terminal() {
       const execRes = await fetch('/api/execute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData)
+        body: JSON.stringify(currentFormData)
       });
 
       const execData = await handleResponse(execRes);
@@ -266,14 +280,16 @@ export default function Terminal() {
           <h2 className="text-sm font-semibold text-slate-300">Configuración de Conexión</h2>
         </div>
         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-          <select name="engine" value={formData.engine} onChange={handleInputChange} className="bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm text-slate-300 focus:border-fuchsia-500 outline-none transition-colors">
+          <select name="engine" value={formData.engine} onChange={handleInputChange} disabled={isExecuting || isBackingUp || isUploading} className="bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm text-slate-300 focus:border-fuchsia-500 outline-none transition-colors disabled:opacity-50">
             <option value="mysql">MySQL</option>
+            <option value="mongodb">MongoDB</option>
+            <option value="cassandra">Cassandra</option>
           </select>
-          <input name="host" placeholder="Host" value={formData.host} onChange={handleInputChange} className="bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm text-slate-300 outline-none focus:border-fuchsia-500 transition-colors" />
-          <input name="port" placeholder="Puerto" value={formData.port} onChange={handleInputChange} className="bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm text-slate-300 outline-none focus:border-fuchsia-500 transition-colors" />
-          <input name="user" placeholder="Usuario" value={formData.user} onChange={handleInputChange} className="bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm text-slate-300 outline-none focus:border-fuchsia-500 transition-colors" />
-          <input name="password" type="password" placeholder="Contraseña" value={formData.password} onChange={handleInputChange} className="bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm text-slate-300 outline-none focus:border-fuchsia-500 transition-colors" />
-          <input name="database" placeholder="DB (Opcional)" value={formData.database} onChange={handleInputChange} className="bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm text-slate-300 outline-none focus:border-fuchsia-500 transition-colors" />
+          <input name="host" placeholder="Host" value={formData.host} onChange={handleInputChange} disabled={isExecuting || isBackingUp || isUploading} className="bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm text-slate-300 outline-none focus:border-fuchsia-500 transition-colors disabled:opacity-50" />
+          <input name="port" placeholder="Puerto" value={formData.port} onChange={handleInputChange} disabled={isExecuting || isBackingUp || isUploading} className="bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm text-slate-300 outline-none focus:border-fuchsia-500 transition-colors disabled:opacity-50" />
+          <input name="user" placeholder="Usuario" value={formData.user} onChange={handleInputChange} disabled={isExecuting || isBackingUp || isUploading} className="bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm text-slate-300 outline-none focus:border-fuchsia-500 transition-colors disabled:opacity-50" />
+          <input name="password" type="password" placeholder="Contraseña" value={formData.password} onChange={handleInputChange} disabled={isExecuting || isBackingUp || isUploading} className="bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm text-slate-300 outline-none focus:border-fuchsia-500 transition-colors disabled:opacity-50" />
+          <input name="database" placeholder="DB (Opcional)" value={formData.database} onChange={handleInputChange} disabled={isExecuting || isBackingUp || isUploading} className="bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm text-slate-300 outline-none focus:border-fuchsia-500 transition-colors disabled:opacity-50" />
         </div>
       </div>
 
@@ -353,13 +369,14 @@ export default function Terminal() {
                     log.type === 'error' ? 'text-coral-500' :
                     log.type === 'success' ? 'text-green-400' :
                     log.type === 'warn' ? 'text-yellow-400' :
+                    log.type === 'user' ? 'text-cyan-400 font-semibold' :
                     'text-slate-400'
                   }`}>
                     {log.text}
                   </div>
                 </div>
 
-                {log.data && (
+                {log.data && Array.isArray(log.data) && log.data.length > 0 && typeof log.data[0] === 'object' && log.data[0] !== null && (
                   <div className="overflow-x-auto mt-2 ml-14 border border-slate-700/50 rounded bg-[#0f111a]">
                     <table className="min-w-full text-left border-collapse">
                       <thead>
@@ -393,9 +410,10 @@ export default function Terminal() {
           <div className="p-3 bg-slate-900/60 border-t border-slate-800 flex flex-col gap-2">
             <textarea
               name="query"
-              placeholder={`Comando para ${formData.engine}...`}
+              placeholder={`Comando para ${formData.engine}...\n(Ctrl + Enter para ejecutar)`}
               value={formData.query}
               onChange={handleInputChange}
+              onKeyDown={handleKeyDownCommand}
               className="w-full h-24 bg-[#0a0b0e] border border-slate-700 rounded-xl p-3 text-sm font-mono text-violet-300 outline-none focus:border-violet-500 resize-none transition-colors"
             />
             <div className="flex justify-end gap-2">
