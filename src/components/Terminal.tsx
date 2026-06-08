@@ -1,352 +1,48 @@
 'use client'
 
-import { useState, useRef, useEffect } from 'react';
-import { Send, Cpu, Sparkles, Bot, TerminalSquare, Copy, Trash2, Database, Download, Upload } from 'lucide-react';
+import { Send, Cpu, TerminalSquare, Trash2, Download, Upload } from 'lucide-react';
+import ConnectionForm from './ConnectionForm';
+import AiChat from './AiChat';
+import VisualCrud from './VisualCrud';
+import TerminalLogs from './TerminalLogs';
+import { useTerminalLogic } from '../hooks/useTerminalLogic';
 
 export default function Terminal() {
-  const [formData, setFormData] = useState({
-    engine: 'mysql',
-    host: 'localhost',
-    port: '3306',
-    user: 'root',
-    password: process.env.NEXT_PUBLIC_DB_PASSWORD || '',
-    database: '',
-    query: ''
-  });
-
-  // Estados separados para la Terminal y el Chat
-  const [dbLogs, setDbLogs] = useState<{text: string, type: 'info' | 'success' | 'error' | 'warn' | 'ai' | 'user', data?: any[]}[]>([
-    { text: 'TERMINAL SGBD. A la espera de comandos...', type: 'info' }
-  ]);
-  const [chatLogs, setChatLogs] = useState<{text: string, type: 'user' | 'ai' | 'error'}[]>([
-    { text: 'SISTEMA INICIADO. Hola, soy Glitch. ¿Qué necesitas consultar o auditar en tus bases de datos?', type: 'ai' }
-  ]);
-  const [aiPrompt, setAiPrompt] = useState('');
-
-  const [isExecuting, setIsExecuting] = useState(false);
-  const [isAsking, setIsAsking] = useState(false);
-  const dbLogsEndRef = useRef<HTMLDivElement>(null);
-  const chatLogsEndRef = useRef<HTMLDivElement>(null);
-
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
-    setFormData({ ...formData, [e.target.name]: e.target.value });
-  };
-
-  const addDbLog = (text: string, type: 'info' | 'success' | 'error' | 'warn' | 'ai' | 'user', data?: any[]) => {
-    setDbLogs(prev => [...prev, { text, type, data }]);
-  };
-
-  const clearDbLogs = () => {
-    setDbLogs([{ text: 'TERMINAL SGBD. A la espera de comandos...', type: 'info' }]);
-  };
-
-  const clearChatLogs = () => {
-    setChatLogs([{ text: 'SISTEMA INICIADO. Hola, soy Glitch. ¿Qué necesitas consultar o auditar en tus bases de datos?', type: 'ai' }]);
-  };
-
-  useEffect(() => {
-    dbLogsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [dbLogs]);
-
-  useEffect(() => {
-    chatLogsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatLogs]);
-
-
-  const handleUseCommand = (text: string) => {
-    const codeMatch = text.match(/```(?:[a-zA-Z]*\n)?([\s\S]*?)```/);
-    const commandToUse = codeMatch ? codeMatch[1].trim() : text.trim();
-    setFormData(prev => ({ ...prev, query: commandToUse }));
-  };
-
-  // Ejecutar comando con Ctrl + Enter
-  const handleKeyDownCommand = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-      e.preventDefault();
-      executeCommand();
-    }
-  };
-
-  const handleResponse = async (res: Response) => {
-    const text = await res.text();
-    try {
-      return JSON.parse(text);
-    } catch (e) {
-      throw new Error(`El servidor no devolvió JSON válido. Código: ${res.status}. Revisa la consola de tu terminal Node.`);
-    }
-  };
-
-
-  const executeCommand = async () => {
-    if (!formData.query.trim()) return;
-
-    const currentQuery = formData.query;
-    const currentFormData = { ...formData };
-
-    setFormData(prev => ({ ...prev, query: '' })); // Limpiar el input
-
-    setIsExecuting(true);
-    addDbLog(`> ${currentQuery}`, 'user');
-    addDbLog(`Ejecutando en ${currentFormData.engine}...`, 'info');
-
-    try {
-
-      addDbLog('Analizando privilegios...', 'info');
-      const auditRes = await fetch('/api/audit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: currentQuery, engine: currentFormData.engine, userRole: currentFormData.user })
-      });
-
-      const auditData = await handleResponse(auditRes);
-
-      if (!auditData.allowed) {
-        addDbLog(`BLOQUEO DE SEGURIDAD (${auditData.riskLevel}): ${auditData.reason}`, 'error');
-        if (auditData.suggestedFix) addDbLog(`Sugerencia: ${auditData.suggestedFix}`, 'warn');
-        setIsExecuting(false);
-        return;
-      }
-
-
-      const execRes = await fetch('/api/execute', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(currentFormData)
-      });
-
-      const execData = await handleResponse(execRes);
-
-      if (execData.success) {
-        const data = execData.data;
-        if (typeof data === 'string') {
-          addDbLog(`Éxito: ${data}`, 'success');
-        } else if (Array.isArray(data)) {
-          if (data.length === 0) {
-            addDbLog(`Éxito: 0 filas devueltas.`, 'success');
-          } else if (data.every((r) => typeof r === 'object' && r !== null && !Array.isArray(r))) {
-            // Un solo SELECT
-            addDbLog(`Éxito: ${data.length} fila(s) devuelta(s).`, 'success', data);
-          } else {
-            // Múltiples sentencias o resultados mixtos
-            addDbLog(`Ejecución de múltiples sentencias completada:`, 'success');
-            data.forEach((resItem: any, i: number) => {
-              if (typeof resItem === 'string') {
-                addDbLog(`↳ Sentencia ${i + 1}: ${resItem}`, 'info');
-              } else if (Array.isArray(resItem)) {
-                if (resItem.length === 0) {
-                  addDbLog(`↳ Sentencia ${i + 1}: 0 filas devueltas.`, 'info');
-                } else if (typeof resItem[0] === 'object' && resItem[0] !== null) {
-                  addDbLog(`↳ Sentencia ${i + 1}: ${resItem.length} fila(s) devuelta(s).`, 'success', resItem);
-                } else {
-                  addDbLog(`↳ Sentencia ${i + 1}:\n${JSON.stringify(resItem, null, 2)}`, 'info');
-                }
-              } else if (typeof resItem === 'object' && resItem !== null) {
-                const rowsAffected = resItem.affectedRows !== undefined ? resItem.affectedRows : (resItem.nModified || 0);
-                addDbLog(`↳ Sentencia ${i + 1}: ${rowsAffected} fila(s) afectada(s).`, 'info');
-              }
-            });
-          }
-        } else if (typeof data === 'object' && data !== null && data.affectedRows !== undefined) {
-          addDbLog(`Éxito: ${data.affectedRows} fila(s) afectada(s).`, 'success');
-        } else {
-          addDbLog(`Éxito:\n${JSON.stringify(data, null, 2)}`, 'success');
-        }
-      } else {
-        addDbLog(`Error del SGBD: ${execData.error}`, 'error');
-      }
-    } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : String(error);
-      addDbLog(`Fallo: ${msg}`, 'error');
-    }
-    setIsExecuting(false);
-  };
-
-
-  const askGemini = async () => {
-    if (!aiPrompt.trim()) return;
-    setIsAsking(true);
-
-    const userMessage = aiPrompt;
-    setAiPrompt('');
-    setChatLogs(prev => [...prev, { text: userMessage, type: 'user' }]);
-    setChatLogs(prev => [...prev, { text: `> Consultando sobre ${formData.engine}...`, type: 'info' as any }]); // Log temporal visual
-
-    try {
-      const chatRes = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: userMessage, engine: formData.engine })
-      });
-
-      const chatData = await handleResponse(chatRes);
-
-      if (chatData.success) {
-        setChatLogs(prev => {
-          const newLogs = [...prev];
-          newLogs[newLogs.length - 1] = { text: chatData.reply, type: 'ai' }; // Reemplazar el "> Consultando..."
-          return newLogs;
-        });
-      } else {
-        setChatLogs(prev => [...prev, { text: `Error de IA: ${chatData.error}`, type: 'error' }]);
-      }
-    } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : String(error);
-      setChatLogs(prev => [...prev, { text: `Fallo de IA: ${msg}`, type: 'error' }]);
-    }
-    setIsAsking(false);
-  };
-
-  const [isBackingUp, setIsBackingUp] = useState(false);
-  const [isUploading, setIsUploading] = useState(false);
-
-  const uploadToFtp = async () => {
-    if (!formData.database) { addDbLog('Especifica la base de datos en el campo DB.', 'warn'); return; }
-    setIsUploading(true);
-    addDbLog(`> Generando backup de "${formData.database}" y subiendo al servidor FTP...`, 'info');
-    try {
-      const res = await fetch('/api/ftp-upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mysqlHost: formData.host,
-          mysqlPort: formData.port,
-          mysqlUser: formData.user,
-          mysqlPassword: formData.password,
-          database: formData.database,
-        }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        addDbLog(data.message, 'success');
-      } else {
-        addDbLog(`Error FTP: ${data.error}`, 'error');
-      }
-    } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : String(error);
-      addDbLog(`Fallo FTP: ${msg}`, 'error');
-    }
-    setIsUploading(false);
-  };
-
-  const downloadBackup = async () => {
-    if (formData.engine !== 'mysql') {
-      addDbLog('El backup automático solo está disponible para MySQL.', 'warn');
-      return;
-    }
-    if (!formData.database) {
-      addDbLog('Especifica el nombre de la base de datos en el campo DB antes de hacer backup.', 'warn');
-      return;
-    }
-    setIsBackingUp(true);
-    addDbLog(`> Generando backup de "${formData.database}"...`, 'info');
-
-    try {
-      const res = await fetch('/api/backup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData),
-      });
-
-      if (!res.ok) {
-        const err = await res.json();
-        addDbLog(`Error al generar backup: ${err.error}`, 'error');
-        setIsBackingUp(false);
-        return;
-      }
-
-      // Descargar el archivo SQL
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `backup_${formData.database}_${new Date().toISOString().slice(0,10)}.sql`;
-      a.click();
-      URL.revokeObjectURL(url);
-
-      addDbLog(`Backup de "${formData.database}" descargado exitosamente.`, 'success');
-    } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : String(error);
-      addDbLog(`Fallo al generar backup: ${msg}`, 'error');
-    }
-    setIsBackingUp(false);
-  };
+  const {
+    formData, handleInputChange,
+    dbLogs, clearDbLogs, dbLogsEndRef,
+    chatLogs, clearChatLogs, chatLogsEndRef,
+    aiPrompt, setAiPrompt, askGemini, isAsking, handleUseCommand,
+    inputMode, setInputMode,
+    visualCrud, setVisualCrud, availableTables, availableActions, currentTable, currentAction, handleFieldChange, removeField,
+    isExecuting, isBackingUp, isUploading,
+    executeVisualCrud, executeCommand, downloadBackup, uploadToFtp, handleKeyDownCommand
+  } = useTerminalLogic();
 
   return (
     <div className="flex flex-col gap-6">
       {/* Formulario de Conexión Mejorado */}
-      <div className="bg-[#0a0b0e] border border-slate-800 rounded-xl p-4 flex flex-col gap-3 shadow-lg">
-        <div className="flex items-center gap-2 mb-1">
-          <Database className="w-4 h-4 text-slate-400" />
-          <h2 className="text-sm font-semibold text-slate-300">Configuración de Conexión</h2>
-        </div>
-        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-          <select name="engine" value={formData.engine} onChange={handleInputChange} disabled={isExecuting || isBackingUp || isUploading} className="bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm text-slate-300 focus:border-fuchsia-500 outline-none transition-colors disabled:opacity-50">
-            <option value="mysql">MySQL</option>
-            <option value="mongodb">MongoDB</option>
-            <option value="cassandra">Cassandra</option>
-          </select>
-          <input name="host" placeholder="Host" value={formData.host} onChange={handleInputChange} disabled={isExecuting || isBackingUp || isUploading} className="bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm text-slate-300 outline-none focus:border-fuchsia-500 transition-colors disabled:opacity-50" />
-          <input name="port" placeholder="Puerto" value={formData.port} onChange={handleInputChange} disabled={isExecuting || isBackingUp || isUploading} className="bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm text-slate-300 outline-none focus:border-fuchsia-500 transition-colors disabled:opacity-50" />
-          <input name="user" placeholder="Usuario" value={formData.user} onChange={handleInputChange} disabled={isExecuting || isBackingUp || isUploading} className="bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm text-slate-300 outline-none focus:border-fuchsia-500 transition-colors disabled:opacity-50" />
-          <input name="password" type="password" placeholder="Contraseña" value={formData.password} onChange={handleInputChange} disabled={isExecuting || isBackingUp || isUploading} className="bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm text-slate-300 outline-none focus:border-fuchsia-500 transition-colors disabled:opacity-50" />
-          <input name="database" placeholder="DB (Opcional)" value={formData.database} onChange={handleInputChange} disabled={isExecuting || isBackingUp || isUploading} className="bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm text-slate-300 outline-none focus:border-fuchsia-500 transition-colors disabled:opacity-50" />
-        </div>
-      </div>
+      <ConnectionForm
+        formData={formData}
+        handleInputChange={handleInputChange}
+        isDisabled={isExecuting || isBackingUp || isUploading}
+      />
 
       {/* Paneles Divididos: Chat IA | Terminal DB */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 h-[600px]">
 
         {/* PANEL IZQUIERDO: CHAT IA */}
-        <div className="flex flex-col bg-[#0a0b0e] border border-slate-800 rounded-xl overflow-hidden shadow-lg h-full">
-          <div className="bg-slate-900/60 p-3 border-b border-slate-800 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 flex-1">
-              <Bot className="w-4 h-4 text-fuchsia-400" />
-              <h3 className="font-semibold text-fuchsia-100 text-sm">Asistente Glitch IA</h3>
-            </div>
-            <button onClick={clearChatLogs} title="Limpiar Chat" className="p-1 text-slate-500 hover:text-fuchsia-400 hover:bg-fuchsia-500/10 rounded transition-all">
-              <Trash2 className="w-4 h-4" />
-            </button>
-          </div>
-
-          <div className="flex-1 overflow-y-auto p-4 space-y-4 font-sans text-sm">
-            {chatLogs.map((log, index) => (
-              <div key={index} className={`flex ${log.type === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[85%] p-3 rounded-xl break-words whitespace-pre-wrap ${
-                  log.type === 'user' ? 'bg-violet-600 text-white' :
-                  log.type === 'error' ? 'bg-red-900/40 text-red-200 border border-red-800/50' :
-                  (log.type as string) === 'info' ? 'bg-transparent text-slate-500 text-xs italic' :
-                  'bg-slate-800 text-slate-200 border border-slate-700/50 shadow-md'
-                }`}>
-                  {log.text}
-                  {/* Botón para enviar código a la terminal */}
-                  {log.type === 'ai' && (
-                    <button
-                      onClick={() => handleUseCommand(log.text)}
-                      className="mt-3 flex items-center gap-1.5 px-3 py-1.5 bg-fuchsia-500/20 hover:bg-fuchsia-500/30 text-fuchsia-300 text-xs font-medium rounded-lg transition-colors border border-fuchsia-500/30"
-                    >
-                      <Copy className="w-3.5 h-3.5" />
-                      Usar este comando
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))}
-            <div ref={chatLogsEndRef} />
-          </div>
-
-          <div className="p-3 bg-slate-900/60 border-t border-slate-800 flex gap-2">
-            <input
-              value={aiPrompt}
-              onChange={(e) => setAiPrompt(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && askGemini()}
-              placeholder={`Pregunta a Glitch sobre ${formData.engine}...`}
-              className="flex-1 bg-black border border-slate-700 rounded-lg p-2.5 text-sm outline-none focus:border-fuchsia-500 text-slate-200 transition-colors"
-            />
-            <button onClick={askGemini} disabled={isAsking} className="bg-slate-800 hover:bg-slate-700 text-fuchsia-400 border border-fuchsia-500/30 px-4 py-2 rounded-lg flex items-center justify-center transition-colors disabled:opacity-50">
-              {isAsking ? <Cpu className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-            </button>
-          </div>
-        </div>
+        <AiChat
+          chatLogs={chatLogs}
+          aiPrompt={aiPrompt}
+          setAiPrompt={setAiPrompt}
+          askGemini={askGemini}
+          isAsking={isAsking}
+          clearChatLogs={clearChatLogs}
+          handleUseCommand={handleUseCommand}
+          chatLogsEndRef={chatLogsEndRef}
+          engine={formData.engine}
+        />
 
         {/* PANEL DERECHO: TERMINAL SGBD */}
         <div className="flex flex-col bg-black border border-slate-800 rounded-xl overflow-hidden shadow-lg h-full">
@@ -360,62 +56,34 @@ export default function Terminal() {
             </button>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-4 space-y-3 font-mono text-xs shadow-inner">
-            {dbLogs.map((log, index) => (
-              <div key={index} className="flex flex-col gap-1 p-1 rounded">
-                <div className="flex gap-3 items-start">
-                  <span className="text-slate-600 shrink-0 mt-0.5">[{new Date().toLocaleTimeString()}]</span>
-                  <div className={`break-words whitespace-pre-wrap ${
-                    log.type === 'error' ? 'text-coral-500' :
-                    log.type === 'success' ? 'text-green-400' :
-                    log.type === 'warn' ? 'text-yellow-400' :
-                    log.type === 'user' ? 'text-cyan-400 font-semibold' :
-                    'text-slate-400'
-                  }`}>
-                    {log.text}
-                  </div>
-                </div>
-
-                {log.data && Array.isArray(log.data) && log.data.length > 0 && typeof log.data[0] === 'object' && log.data[0] !== null && (
-                  <div className="overflow-x-auto mt-2 ml-14 border border-slate-700/50 rounded bg-[#0f111a]">
-                    <table className="min-w-full text-left border-collapse">
-                      <thead>
-                        <tr>
-                          {Object.keys(log.data[0]).map((key) => (
-                            <th key={key} className="border-b border-slate-700 bg-slate-800/80 p-2 font-semibold text-slate-300 whitespace-nowrap">
-                              {key}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {log.data.map((row: any, i: number) => (
-                          <tr key={i} className="hover:bg-slate-800/50 transition-colors">
-                            {Object.values(row).map((val: any, j: number) => (
-                              <td key={j} className="border-b border-slate-800 p-2 text-slate-400 whitespace-nowrap">
-                                {val !== null && val !== undefined ? (typeof val === 'object' ? JSON.stringify(val) : String(val)) : <span className="italic text-slate-600">null</span>}
-                              </td>
-                            ))}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            ))}
-            <div ref={dbLogsEndRef} />
-          </div>
+          <TerminalLogs dbLogs={dbLogs} dbLogsEndRef={dbLogsEndRef} />
 
           <div className="p-3 bg-slate-900/60 border-t border-slate-800 flex flex-col gap-2">
-            <textarea
-              name="query"
-              placeholder={`Comando para ${formData.engine}...\n(Ctrl + Enter para ejecutar)`}
-              value={formData.query}
-              onChange={handleInputChange}
-              onKeyDown={handleKeyDownCommand}
-              className="w-full h-24 bg-[#0a0b0e] border border-slate-700 rounded-xl p-3 text-sm font-mono text-violet-300 outline-none focus:border-violet-500 resize-none transition-colors"
-            />
+            {/* Tabs Modo Consola / Modo Visual */}
+            <div className="flex gap-4 border-b border-slate-800 pb-2 mb-2">
+              <button onClick={() => setInputMode('visual')} className={`text-xs font-semibold px-2 py-1 transition-colors ${inputMode === 'visual' ? 'text-fuchsia-400 border-b-2 border-fuchsia-400' : 'text-slate-500 hover:text-slate-300'}`}>
+                Modo Visual (Formulario)
+              </button>
+              <button onClick={() => setInputMode('console')} className={`text-xs font-semibold px-2 py-1 transition-colors ${inputMode === 'console' ? 'text-fuchsia-400 border-b-2 border-fuchsia-400' : 'text-slate-500 hover:text-slate-300'}`}>
+                Modo Consola (SQL)
+              </button>
+            </div>
+
+            {inputMode === 'visual' ? (
+              <VisualCrud
+                visualCrud={visualCrud}
+                setVisualCrud={setVisualCrud}
+                currentTable={currentTable}
+                currentAction={currentAction}
+                availableTables={availableTables}
+                availableActions={availableActions}
+                handleFieldChange={handleFieldChange}
+                removeField={removeField}
+              />
+            ) : (
+              <textarea name="query" placeholder={`Escribe tu sentencia SQL...\n(Ctrl + Enter para ejecutar)`} value={formData.query} onChange={handleInputChange} onKeyDown={handleKeyDownCommand} className="w-full h-24 bg-[#0a0b0e] border border-slate-700 rounded-xl p-3 text-sm font-mono text-violet-300 outline-none focus:border-violet-500 resize-none transition-colors" />
+            )}
+
             <div className="flex justify-end gap-2">
               {formData.engine === 'mysql' && (
                 <button
@@ -440,7 +108,7 @@ export default function Terminal() {
                 </button>
               )}
               <button
-                onClick={executeCommand}
+                onClick={() => inputMode === 'visual' ? executeVisualCrud() : executeCommand()}
                 disabled={isExecuting}
                 className="bg-violet-600 hover:bg-violet-500 text-white px-5 py-2 rounded-lg flex items-center gap-2 text-sm font-medium transition-colors disabled:opacity-50 shadow-md shadow-violet-900/20"
               >
