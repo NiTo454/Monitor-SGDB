@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server';
-import { executeSgbdQuery } from '../../../src/lib/db-client';
+import { testSgbdConnection } from '../../../src/lib/db-client';
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const result = await executeSgbdQuery(body);
+    const result = await testSgbdConnection(body);
     if (result.success) {
       return NextResponse.json(result);
     } else {

@@ -5,8 +5,6 @@ import { promisify } from 'util';
 
 const execAsync = promisify(exec);
 
-
-
 const COMPOSE_FILE = process.env.COMPOSE_FILE_PATH || 'C:/Users/NiTo/Documents/Proyectos/db/db.yml';
 
 export async function controlContainer(service: string, action: 'start' | 'stop') {

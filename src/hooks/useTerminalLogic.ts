@@ -1,95 +1,200 @@
 import { useState, useRef, useEffect, ChangeEvent, KeyboardEvent } from 'react';
+import { SgbdConfig } from '../components/ConfigModal';
+
+const DEFAULT_CONFIGS: Record<string, SgbdConfig> = {
+  mysql: { engine: 'mysql', host: 'localhost', port: '3308', user: 'root', password: 'root', database: 'Prueba', query: '' },
+  sqlserver: { engine: 'sqlserver', host: 'localhost', port: '1433', user: 'sa', password: 'Password123!', database: 'master', query: '' },
+  postgresql: { engine: 'postgresql', host: 'localhost', port: '5433', user: 'USUARIOPRINCIPAL', password: 'root', database: 'postgres', query: '' },
+  mongodb: { engine: 'mongodb', host: 'localhost', port: '27017', user: 'USUARIOPRINCIPAL', password: 'root', database: 'admin', query: '' },
+  cassandra: { engine: 'cassandra', host: 'localhost', port: '9042', user: 'cassandra', password: 'cassandra', database: 'system', query: '' }
+};
 
 export function useTerminalLogic() {
-  const [formData, setFormData] = useState({
-    engine: 'mysql',
-    host: 'localhost',
-    port: '3306',
-    user: 'root',
-    password: process.env.NEXT_PUBLIC_DB_PASSWORD || '',
-    database: '',
-    query: ''
+  const [configs, setConfigs] = useState<Record<string, SgbdConfig>>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('sgbd_configs');
+      if (saved) {
+        try { return JSON.parse(saved); } catch (e) {}
+      }
+    }
+    return DEFAULT_CONFIGS;
   });
 
-  const [dbLogs, setDbLogs] = useState<{text: string, type: 'info' | 'success' | 'error' | 'warn' | 'ai' | 'user', data?: any[]}[]>([
-    { text: 'TERMINAL SGBD. A la espera de comandos...', type: 'info' }
+  const [formData, setFormData] = useState<SgbdConfig>(DEFAULT_CONFIGS.mysql);
+
+  // Schema states
+  const [schemaDatabases, setSchemaDatabases] = useState<string[]>([]);
+  const [schemaTables, setSchemaTables] = useState<string[]>([]);
+  const [schemaColumns, setSchemaColumns] = useState<string[]>([]);
+  const [loadingSchema, setLoadingSchema] = useState<boolean>(false);
+
+  const [dbLogs, setDbLogs] = useState<{text: string, type: 'info' | 'success' | 'error' | 'warn' | 'user', data?: any[]}[]>([
+    { text: 'MONITOR SGBD INICIADO. Selecciona un motor de base de datos para consultar o monitorear.', type: 'info' }
   ]);
-  const [chatLogs, setChatLogs] = useState<{text: string, type: 'user' | 'ai' | 'error' | 'info'}[]>([
-    { text: 'SISTEMA INICIADO. Hola, soy Glitch. ¿Qué necesitas consultar o auditar en tus bases de datos?', type: 'ai' }
-  ]);
-  const [aiPrompt, setAiPrompt] = useState('');
 
   const [isExecuting, setIsExecuting] = useState(false);
-  const [isAsking, setIsAsking] = useState(false);
   const [isBackingUp, setIsBackingUp] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
 
   const dbLogsEndRef = useRef<HTMLDivElement>(null);
-  const chatLogsEndRef = useRef<HTMLDivElement>(null);
 
-  const [inputMode, setInputMode] = useState<'console' | 'visual'>('visual');
+  const [inputMode, setInputMode] = useState<'console' | 'visual'>('console');
   const [visualCrud, setVisualCrud] = useState({
-    table: 'productos',
+    table: '',
     action: 'SELECT',
     fields: [{ column: '', value: '' }],
     conditionColumn: 'id',
     conditionValue: ''
   });
 
-  const ROLE_PERMISSIONS: Record<string, Record<string, string[]>> = {
-    root: { categorias: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'], productos: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'], clientes: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'], empleados: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'], ventas: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'], detalles_venta: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'], auditoria_logs: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
-    desarrollador: { categorias: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'], productos: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'], clientes: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'], empleados: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'], ventas: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'], detalles_venta: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'], auditoria_logs: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
-    soporte: { clientes: ['SELECT', 'INSERT', 'UPDATE'], productos: ['SELECT'], ventas: ['SELECT', 'UPDATE'], detalles_venta: ['SELECT'] },
-    invitado: { productos: ['SELECT'], categorias: ['SELECT'] },
-    auditor: { categorias: ['SELECT'], productos: ['SELECT'], clientes: ['SELECT'], empleados: ['SELECT'], ventas: ['SELECT'], detalles_venta: ['SELECT'], auditoria_logs: ['SELECT'] }
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('sgbd_configs', JSON.stringify(configs));
+    }
+  }, [configs]);
+
+  // Cargar BDs cuando cambia el motor o host
+  useEffect(() => {
+    fetchDatabases();
+  }, [formData.engine, formData.host, formData.port, formData.user]);
+
+  // Cargar Tablas cuando cambia la base de datos seleccionada y limpiar campos previos
+  useEffect(() => {
+    setVisualCrud(prev => ({
+      ...prev,
+      fields: [{ column: '', value: '' }],
+      conditionColumn: 'id',
+      conditionValue: ''
+    }));
+    fetchTables();
+  }, [formData.database, formData.engine]);
+
+  // Cargar Columnas cuando cambia la tabla seleccionada y resetear campos
+  useEffect(() => {
+    if (visualCrud.table) {
+      setVisualCrud(prev => ({
+        ...prev,
+        fields: [{ column: '', value: '' }]
+      }));
+      fetchColumns(visualCrud.table);
+    } else {
+      setSchemaColumns([]);
+    }
+  }, [visualCrud.table]);
+
+  const fetchDatabases = async () => {
+    try {
+      const res = await fetch('/api/schema', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...formData, action: 'getDatabases' })
+      });
+      const data = await res.json();
+      if (data.success && Array.isArray(data.databases)) {
+        setSchemaDatabases(data.databases);
+        if (data.databases.length > 0) {
+          if (!formData.database || !data.databases.includes(formData.database)) {
+            const userDb = data.databases.find((d: string) => !['information_schema', 'performance_schema', 'mysql', 'sys', 'master', 'tempdb', 'model', 'msdb'].includes(d)) || data.databases[0];
+            updateDatabaseSelection(userDb);
+          }
+        }
+      }
+    } catch (e) {}
   };
 
-  const availableTables = Object.keys(ROLE_PERMISSIONS[formData.user] || ROLE_PERMISSIONS['root']);
-  const currentTable = availableTables.includes(visualCrud.table) ? visualCrud.table : (availableTables[0] || '');
-  const availableActions = currentTable ? (ROLE_PERMISSIONS[formData.user]?.[currentTable] || ROLE_PERMISSIONS['root'][currentTable] || []) : [];
-  const currentAction = availableActions.includes(visualCrud.action) ? visualCrud.action : (availableActions[0] || 'SELECT');
-
-  const handleFieldChange = (index: number, key: 'column' | 'value', val: string) => {
-    const newFields = [...visualCrud.fields];
-    newFields[index][key] = val;
-    setVisualCrud({ ...visualCrud, fields: newFields });
+  const fetchTables = async () => {
+    setLoadingSchema(true);
+    try {
+      const res = await fetch('/api/schema', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...formData, action: 'getTables' })
+      });
+      const data = await res.json();
+      if (data.success && Array.isArray(data.tables)) {
+        setSchemaTables(data.tables);
+        if (data.tables.length > 0) {
+          setVisualCrud(prev => ({ ...prev, table: data.tables[0] }));
+        } else {
+          setVisualCrud(prev => ({ ...prev, table: '' }));
+        }
+      } else {
+        setSchemaTables([]);
+        setVisualCrud(prev => ({ ...prev, table: '' }));
+      }
+    } catch (e) {
+      setSchemaTables([]);
+      setVisualCrud(prev => ({ ...prev, table: '' }));
+    }
+    setLoadingSchema(false);
   };
 
-  const removeField = (index: number) => {
-    const newFields = [...visualCrud.fields];
-    newFields.splice(index, 1);
-    setVisualCrud({ ...visualCrud, fields: newFields });
+  const fetchColumns = async (tableName: string) => {
+    try {
+      const res = await fetch('/api/schema', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...formData, table: tableName, action: 'getColumns' })
+      });
+      const data = await res.json();
+      if (data.success && Array.isArray(data.columns)) {
+        setSchemaColumns(data.columns);
+      } else {
+        setSchemaColumns([]);
+      }
+    } catch (e) {
+      setSchemaColumns([]);
+    }
+  };
+
+  const updateDatabaseSelection = (newDb: string) => {
+    setFormData(prev => ({ ...prev, database: newDb }));
+    setConfigs(prev => ({
+      ...prev,
+      [formData.engine]: { ...prev[formData.engine], database: newDb }
+    }));
+  };
+
+  const updateEngineConfig = (engine: string, newConfig: SgbdConfig) => {
+    setConfigs(prev => ({ ...prev, [engine]: newConfig }));
+    if (formData.engine === engine) {
+      setFormData(newConfig);
+    }
+  };
+
+  const handleEngineSelect = (engine: string) => {
+    const targetConfig = configs[engine] || DEFAULT_CONFIGS[engine] || {
+      engine, host: 'localhost', port: '3306', user: 'root', password: '', database: '', query: ''
+    };
+    setFormData(targetConfig);
+    addDbLog(`Cambiado contexto a motor: ${engine.toUpperCase()} (${targetConfig.host}:${targetConfig.port})`, 'info');
   };
 
   const handleInputChange = (e: ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
-    let newFormData = { ...formData, [name]: value };
-
-    if (name === 'user') {
-      if (value === 'auditor') newFormData.password = 'auditor123';
-      else if (value === 'desarrollador') newFormData.password = 'desarrollador123';
-      else if (value === 'soporte') newFormData.password = 'soporte123';
-      else if (value === 'invitado') newFormData.password = 'invitado123';
-      else if (value === 'root') newFormData.password = process.env.NEXT_PUBLIC_DB_PASSWORD || '';
+    if (name === 'engine') {
+      handleEngineSelect(value);
+    } else if (name === 'database') {
+      updateDatabaseSelection(value);
+    } else {
+      setFormData(prev => ({ ...prev, [name]: value }));
+      setConfigs(prev => ({
+        ...prev,
+        [formData.engine]: { ...prev[formData.engine], [name]: value }
+      }));
     }
-    setFormData(newFormData);
   };
 
-  const addDbLog = (text: string, type: 'info' | 'success' | 'error' | 'warn' | 'ai' | 'user', data?: any[]) => {
+  const addDbLog = (text: string, type: 'info' | 'success' | 'error' | 'warn' | 'user', data?: any[]) => {
     setDbLogs(prev => [...prev, { text, type, data }]);
   };
 
   const clearDbLogs = () => setDbLogs([{ text: 'TERMINAL SGBD. A la espera de comandos...', type: 'info' }]);
 
-  const clearChatLogs = () => setChatLogs([{ text: 'SISTEMA INICIADO. Hola, soy Glitch. ¿Qué necesitas consultar o auditar en tus bases de datos?', type: 'ai' }]);
-
   useEffect(() => { dbLogsEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [dbLogs]);
-  useEffect(() => { chatLogsEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [chatLogs]);
 
-  const handleUseCommand = (text: string) => {
-    const codeMatch = text.match(/```(?:[a-zA-Z]*\n)?([\s\S]*?)```/);
-    const commandToUse = codeMatch ? codeMatch[1].trim() : text.trim();
-    setFormData(prev => ({ ...prev, query: commandToUse }));
+  const setQueryShortcut = (queryText: string) => {
+    setFormData(prev => ({ ...prev, query: queryText }));
     setInputMode('console');
   };
 
@@ -107,26 +212,53 @@ export function useTerminalLogic() {
   };
 
   const executeVisualCrud = () => {
+    if (!visualCrud.table) {
+      addDbLog('Selecciona una tabla válida antes de ejecutar.', 'warn');
+      return;
+    }
+
     let generatedSql = '';
-    if (currentAction === 'SELECT') {
-      generatedSql = `SELECT * FROM ${currentTable};`;
-    } else if (currentAction === 'INSERT') {
-      const cols = visualCrud.fields.filter(f => f.column).map(f => f.column).join(', ');
-      const vals = visualCrud.fields.filter(f => f.column).map(f => `'${f.value}'`).join(', ');
-      generatedSql = `INSERT INTO ${currentTable} (${cols}) VALUES (${vals});`;
-    } else if (currentAction === 'UPDATE') {
-      const sets = visualCrud.fields.filter(f => f.column).map(f => `${f.column} = '${f.value}'`).join(', ');
-      const condition = visualCrud.conditionColumn ? ` WHERE ${visualCrud.conditionColumn} = '${visualCrud.conditionValue}'` : '';
-      generatedSql = `UPDATE ${currentTable} SET ${sets}${condition};`;
-    } else if (currentAction === 'DELETE') {
-      const condition = visualCrud.conditionColumn ? ` WHERE ${visualCrud.conditionColumn} = '${visualCrud.conditionValue}'` : '';
-      generatedSql = `DELETE FROM ${currentTable}${condition};`;
+    if (visualCrud.action === 'SELECT') {
+      if (formData.engine === 'mongodb') {
+        generatedSql = `{ "find": "${visualCrud.table}", "limit": 50 }`;
+      } else {
+        generatedSql = `SELECT * FROM ${visualCrud.table};`;
+      }
+    } else if (visualCrud.action === 'INSERT') {
+      if (formData.engine === 'mongodb') {
+        const docObj: Record<string, any> = {};
+        visualCrud.fields.filter(f => f.column).forEach(f => { docObj[f.column] = f.value; });
+        generatedSql = `{ "insert": "${visualCrud.table}", "documents": [${JSON.stringify(docObj)}] }`;
+      } else {
+        const cols = visualCrud.fields.filter(f => f.column).map(f => f.column).join(', ');
+        const vals = visualCrud.fields.filter(f => f.column).map(f => `'${f.value}'`).join(', ');
+        generatedSql = `INSERT INTO ${visualCrud.table} (${cols}) VALUES (${vals});`;
+      }
+    } else if (visualCrud.action === 'UPDATE') {
+      if (formData.engine === 'mongodb') {
+        const updateObj: Record<string, any> = {};
+        visualCrud.fields.filter(f => f.column).forEach(f => { updateObj[f.column] = f.value; });
+        const filterObj = visualCrud.conditionColumn ? { [visualCrud.conditionColumn]: visualCrud.conditionValue } : {};
+        generatedSql = `{ "update": "${visualCrud.table}", "updates": [{ "q": ${JSON.stringify(filterObj)}, "u": { "$set": ${JSON.stringify(updateObj)} } }] }`;
+      } else {
+        const sets = visualCrud.fields.filter(f => f.column).map(f => `${f.column} = '${f.value}'`).join(', ');
+        const condition = visualCrud.conditionColumn ? ` WHERE ${visualCrud.conditionColumn} = '${visualCrud.conditionValue}'` : '';
+        generatedSql = `UPDATE ${visualCrud.table} SET ${sets}${condition};`;
+      }
+    } else if (visualCrud.action === 'DELETE') {
+      if (formData.engine === 'mongodb') {
+        const filterObj = visualCrud.conditionColumn ? { [visualCrud.conditionColumn]: visualCrud.conditionValue } : {};
+        generatedSql = `{ "delete": "${visualCrud.table}", "deletes": [{ "q": ${JSON.stringify(filterObj)}, "limit": 1 }] }`;
+      } else {
+        const condition = visualCrud.conditionColumn ? ` WHERE ${visualCrud.conditionColumn} = '${visualCrud.conditionValue}'` : '';
+        generatedSql = `DELETE FROM ${visualCrud.table}${condition};`;
+      }
     }
     executeCommand(generatedSql);
   };
 
   const executeCommand = async (overrideQuery?: string) => {
-    const finalQuery = typeof overrideQuery === 'string' ? overrideQuery : formData.query;
+    const finalQuery = (typeof overrideQuery === 'string' ? overrideQuery : formData.query) || '';
     if (!finalQuery.trim()) return;
 
     const currentQuery = finalQuery;
@@ -135,24 +267,9 @@ export function useTerminalLogic() {
 
     setIsExecuting(true);
     addDbLog(`> ${currentQuery}`, 'user');
-    addDbLog(`Ejecutando en ${currentFormData.engine}...`, 'info');
+    addDbLog(`Ejecutando consulta en ${currentFormData.engine.toUpperCase()} (${currentFormData.host}:${currentFormData.port})...`, 'info');
 
     try {
-      addDbLog('Analizando privilegios...', 'info');
-      const auditRes = await fetch('/api/audit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: currentQuery, engine: currentFormData.engine, userRole: currentFormData.user })
-      });
-
-      const auditData = await handleResponse(auditRes);
-      if (!auditData.allowed) {
-        addDbLog(`BLOQUEO DE SEGURIDAD (${auditData.riskLevel}): ${auditData.reason}`, 'error');
-        if (auditData.suggestedFix) addDbLog(`Sugerencia: ${auditData.suggestedFix}`, 'warn');
-        setIsExecuting(false);
-        return;
-      }
-
       const execRes = await fetch('/api/execute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -164,61 +281,25 @@ export function useTerminalLogic() {
         const data = execData.data;
         if (typeof data === 'string') addDbLog(`Éxito: ${data}`, 'success');
         else if (Array.isArray(data)) {
-          if (data.length === 0) addDbLog(`Éxito: 0 filas devueltas.`, 'success');
+          if (data.length === 0) addDbLog(`Éxito: 0 filas/documentos devueltos.`, 'success');
           else if (data.every((r) => typeof r === 'object' && r !== null && !Array.isArray(r))) {
-            addDbLog(`Éxito: ${data.length} fila(s) devuelta(s).`, 'success', data);
+            addDbLog(`Éxito: ${data.length} resultado(s) devuelto(s).`, 'success', data);
           } else {
-            addDbLog(`Ejecución de múltiples sentencias completada:`, 'success');
+            addDbLog(`Resultado de la ejecución:`, 'success');
             data.forEach((resItem: any, i: number) => {
-              if (typeof resItem === 'string') addDbLog(`↳ Sentencia ${i + 1}: ${resItem}`, 'info');
+              if (typeof resItem === 'string') addDbLog(`↳ ${resItem}`, 'info');
               else if (Array.isArray(resItem)) {
-                if (resItem.length === 0) addDbLog(`↳ Sentencia ${i + 1}: 0 filas devueltas.`, 'info');
-                else if (typeof resItem[0] === 'object' && resItem[0] !== null) addDbLog(`↳ Sentencia ${i + 1}: ${resItem.length} fila(s) devuelta(s).`, 'success', resItem);
-                else addDbLog(`↳ Sentencia ${i + 1}:\n${JSON.stringify(resItem, null, 2)}`, 'info');
-              } else if (typeof resItem === 'object' && resItem !== null) {
-                const rowsAffected = resItem.affectedRows !== undefined ? resItem.affectedRows : (resItem.nModified || 0);
-                addDbLog(`↳ Sentencia ${i + 1}: ${rowsAffected} fila(s) afectada(s).`, 'info');
-              }
+                addDbLog(`↳ Resultado ${i + 1}: ${resItem.length} fila(s).`, 'success', resItem);
+              } else addDbLog(`↳ ${JSON.stringify(resItem, null, 2)}`, 'info');
             });
           }
-        } else if (typeof data === 'object' && data !== null && data.affectedRows !== undefined) {
-          addDbLog(`Éxito: ${data.affectedRows} fila(s) afectada(s).`, 'success');
         } else addDbLog(`Éxito:\n${JSON.stringify(data, null, 2)}`, 'success');
       } else addDbLog(`Error del SGBD: ${execData.error}`, 'error');
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
-      addDbLog(`Fallo: ${msg}`, 'error');
+      addDbLog(`Fallo de conexión o ejecución: ${msg}`, 'error');
     }
     setIsExecuting(false);
-  };
-
-  const askGemini = async () => {
-    if (!aiPrompt.trim()) return;
-    setIsAsking(true);
-    const userMessage = aiPrompt;
-    setAiPrompt('');
-    setChatLogs(prev => [...prev, { text: userMessage, type: 'user' }]);
-    setChatLogs(prev => [...prev, { text: `> Consultando sobre ${formData.engine}...`, type: 'info' }]);
-
-    try {
-      const chatRes = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: userMessage, engine: formData.engine })
-      });
-      const chatData = await handleResponse(chatRes);
-      if (chatData.success) {
-        setChatLogs(prev => {
-          const newLogs = [...prev];
-          newLogs[newLogs.length - 1] = { text: chatData.reply, type: 'ai' };
-          return newLogs;
-        });
-      } else setChatLogs(prev => [...prev, { text: `Error de IA: ${chatData.error}`, type: 'error' }]);
-    } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : String(error);
-      setChatLogs(prev => [...prev, { text: `Fallo de IA: ${msg}`, type: 'error' }]);
-    }
-    setIsAsking(false);
   };
 
   const uploadToFtp = async () => {
@@ -274,12 +355,12 @@ export function useTerminalLogic() {
   };
 
   return {
-    formData, handleInputChange,
+    configs, updateEngineConfig,
+    formData, handleInputChange, handleEngineSelect, updateDatabaseSelection,
+    schemaDatabases, schemaTables, schemaColumns, loadingSchema, fetchTables,
     dbLogs, clearDbLogs, dbLogsEndRef,
-    chatLogs, clearChatLogs, chatLogsEndRef,
-    aiPrompt, setAiPrompt, askGemini, isAsking, handleUseCommand,
-    inputMode, setInputMode,
-    visualCrud, setVisualCrud, availableTables, availableActions, currentTable, currentAction, handleFieldChange, removeField,
+    inputMode, setInputMode, setQueryShortcut,
+    visualCrud, setVisualCrud,
     isExecuting, isBackingUp, isUploading,
     executeVisualCrud, executeCommand, downloadBackup, uploadToFtp, handleKeyDownCommand
   };

@@ -1,11 +1,15 @@
 'use client'
 
 import { useState, useEffect } from 'react';
-import { Database, Play, Square, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Database, Play, Square, Loader2, CheckCircle2, AlertCircle, RefreshCw } from 'lucide-react';
 import { controlContainer, checkContainerStatus, getContainerStats } from '../actions/docker';
 
 const DATABASES = [
-  { id: 'mysql', name: 'MySQL', port: '3306' },
+  { id: 'mysql', name: 'MySQL', port: '3308', color: 'text-sky-400' },
+  { id: 'sqlserver', name: 'SQL Server', port: '1433', color: 'text-red-400' },
+  { id: 'postgresql', name: 'PostgreSQL', port: '5433', color: 'text-blue-400' },
+  { id: 'mongodb', name: 'MongoDB', port: '27017', color: 'text-emerald-400' },
+  { id: 'cassandra', name: 'Cassandra', port: '9042', color: 'text-cyan-400' },
 ];
 
 export default function Orchestrator() {
@@ -14,11 +18,19 @@ export default function Orchestrator() {
   const [stats, setStats] = useState<Record<string, { cpu: string, ram: string }>>({});
   const [notification, setNotification] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
 
-  useEffect(() => {
-    DATABASES.forEach(async (db) => {
+  const refreshStatus = async () => {
+    const statusPromises = DATABASES.map(async (db) => {
       const isRunning = await checkContainerStatus(db.id);
-      setStatus(prev => ({ ...prev, [db.id]: isRunning }));
+      return { id: db.id, isRunning };
     });
+    const results = await Promise.all(statusPromises);
+    const newStatus: Record<string, boolean> = {};
+    results.forEach(res => { newStatus[res.id] = res.isRunning; });
+    setStatus(newStatus);
+  };
+
+  useEffect(() => {
+    refreshStatus();
   }, []);
 
   useEffect(() => {
@@ -44,7 +56,7 @@ export default function Orchestrator() {
     };
 
     fetchStats();
-    const interval = setInterval(fetchStats, 3000);
+    const interval = setInterval(fetchStats, 4000);
     return () => {
       mounted = false;
       clearInterval(interval);
@@ -66,7 +78,7 @@ export default function Orchestrator() {
       setStatus(prev => ({ ...prev, [service]: !isRunning }));
       showNotification(`Contenedor de ${service} ${action === 'start' ? 'iniciado' : 'detenido'} correctamente.`, 'success');
     } else {
-      showNotification(`Error de Glitch al operar ${service}. Revisa Docker.`, 'error');
+      showNotification(`Error al operar contenedor ${service}. Verifica Docker Compose.`, 'error');
     }
 
     setLoading(prev => ({ ...prev, [service]: false }));
@@ -74,7 +86,14 @@ export default function Orchestrator() {
 
   return (
     <div className="relative">
-      <div className="grid grid-cols-1 gap-4">
+      <div className="flex justify-between items-center mb-4">
+        <span className="text-xs text-slate-400">Estado en Vivo de Contenedores Docker</span>
+        <button onClick={refreshStatus} className="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded transition-colors">
+          <RefreshCw className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3.5">
         {DATABASES.map((db) => {
           const isRunning = status[db.id] || false;
           const isLoading = loading[db.id] || false;
@@ -82,18 +101,21 @@ export default function Orchestrator() {
           return (
             <div
               key={db.id}
-              className={`flex items-center justify-between p-4 rounded-xl border transition-all duration-300 ${
+              className={`flex items-center justify-between p-3.5 rounded-xl border transition-all duration-300 ${
                 isRunning
-                  ? 'bg-slate-900/60 border-violet-500/50 shadow-[0_0_15px_rgba(139,92,246,0.2)]'
-                  : 'bg-slate-900/20 border-slate-800'
+                  ? 'bg-slate-900/70 border-violet-500/40 shadow-[0_0_15px_rgba(139,92,246,0.15)]'
+                  : 'bg-slate-900/20 border-slate-800/80 opacity-75'
               }`}
             >
               <div className="flex items-center gap-3">
-                <Database className={`w-5 h-5 ${isRunning ? 'text-coral-400' : 'text-slate-500'}`} />
+                <Database className={`w-5 h-5 ${isRunning ? db.color : 'text-slate-600'}`} />
                 <div>
-                  <h3 className="text-sm font-bold text-slate-200">{db.name}</h3>
-                  <div className="flex gap-3 text-xs font-mono mt-1">
-                    <span className="text-slate-500">Puerto: {db.port}</span>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-bold text-slate-200">{db.name}</h3>
+                    <span className={`w-2 h-2 rounded-full ${isRunning ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
+                  </div>
+                  <div className="flex flex-wrap gap-2 text-[11px] font-mono mt-0.5">
+                    <span className="text-slate-500">Port: {db.port}</span>
                     {isRunning && stats[db.id] && (
                       <>
                         <span className="text-cyan-400">CPU: {stats[db.id].cpu}</span>
@@ -110,16 +132,17 @@ export default function Orchestrator() {
                 className={`p-2 rounded-lg transition-all ${
                   isLoading ? 'bg-slate-800 text-slate-400 cursor-not-allowed'
                   : isRunning
-                    ? 'bg-coral-500/10 text-coral-400 hover:bg-coral-500/20 border border-coral-500/20'
-                    : 'bg-fuchsia-600/20 text-fuchsia-300 hover:bg-fuchsia-600/40 border border-fuchsia-500/30'
+                    ? 'bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 border border-rose-500/20'
+                    : 'bg-violet-600/20 text-violet-300 hover:bg-violet-600/40 border border-violet-500/30'
                 }`}
+                title={isRunning ? 'Detener Contenedor' : 'Iniciar Contenedor'}
               >
                 {isLoading ? (
-                  <Loader2 className="w-5 h-5 animate-spin" />
+                  <Loader2 className="w-4 h-4 animate-spin" />
                 ) : isRunning ? (
-                  <Square className="w-5 h-5 fill-current" />
+                  <Square className="w-4 h-4 fill-current" />
                 ) : (
-                  <Play className="w-5 h-5 fill-current" />
+                  <Play className="w-4 h-4 fill-current" />
                 )}
               </button>
             </div>
@@ -127,15 +150,14 @@ export default function Orchestrator() {
         })}
       </div>
 
-
       {notification && (
-        <div className={`fixed bottom-8 right-8 flex items-center gap-3 px-6 py-4 rounded-xl shadow-2xl border backdrop-blur-md animate-in slide-in-from-bottom-5 fade-in duration-300 z-50 ${
+        <div className={`fixed bottom-8 right-8 flex items-center gap-3 px-5 py-3.5 rounded-xl shadow-2xl border backdrop-blur-md animate-in slide-in-from-bottom-5 fade-in duration-300 z-50 ${
           notification.type === 'success'
-            ? 'bg-violet-900/40 border-violet-500 text-violet-100'
-            : 'bg-red-900/40 border-red-500 text-red-100'
+            ? 'bg-violet-950/90 border-violet-500 text-violet-100'
+            : 'bg-rose-950/90 border-rose-500 text-rose-100'
         }`}>
-          {notification.type === 'success' ? <CheckCircle2 className="w-5 h-5 text-violet-400" /> : <AlertCircle className="w-5 h-5 text-red-400" />}
-          <p className="font-medium text-sm">{notification.message}</p>
+          {notification.type === 'success' ? <CheckCircle2 className="w-5 h-5 text-violet-400" /> : <AlertCircle className="w-5 h-5 text-rose-400" />}
+          <p className="font-medium text-xs">{notification.message}</p>
         </div>
       )}
     </div>
